@@ -7,153 +7,111 @@ import io
 from PIL import ImageFont, ImageDraw, Image
 from typing import Dict, List, Any
 import logging
+import os
+import subprocess
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Vietnamese traffic sign class mapping
-CLASS_MAPPING = {
-    0: "Đường người đi bộ cắt ngang",
-    1: "Đường giao nhau (ngã ba bên phải)",
-    2: "Cấm đi ngược chiều",
-    3: "Phải đi vòng sang bên phải",
-    4: "Giao nhau với đường đồng cấp",
-    5: "Giao nhau với đường không ưu tiên",
-    6: "Chỗ ngoặt nguy hiểm vòng bên trái",
-    7: "Cấm rẽ trái",
-    8: "Bến xe buýt",
-    9: "Nơi giao nhau chạy theo vòng xuyến",
-    10: "Cấm dừng và đỗ xe",
-    11: "Chỗ quay xe",
-    12: "Biển gộp làn đường theo phương tiện",
-    13: "Đi chậm",
-    14: "Cấm xe tải",
-    15: "Đường bị thu hẹp về phía phải",
-    16: "Giới hạn chiều cao",
-    17: "Cấm quay đầu",
-    18: "Cấm ô tô khách và ô tô tải",
-    19: "Cấm rẽ phải và quay đầu",
-    20: "Cấm ô tô",
-    21: "Đường bị thu hẹp về phía trái",
-    22: "Gồ giảm tốc phía trước",
-    23: "Cấm xe hai và ba bánh",
-    24: "Kiểm tra",
-    25: "Chỉ dành cho xe máy",
-    26: "Chướng ngoại vật phía trước",
-    27: "Trẻ em",
-    28: "Xe tải và xe công",
-    29: "Cấm mô tô và xe máy",
-    30: "Chỉ dành cho xe tải",
-    31: "Đường có camera giám sát",
-    32: "Cấm rẽ phải",
-    33: "Nhiều chỗ ngoặt nguy hiểm liên tiếp, chỗ đầu tiên sang phải",
-    34: "Cấm xe sơ-mi rơ-moóc",
-    35: "Cấm rẽ trái và phải",
-    36: "Cấm đi thẳng và rẽ phải",
-    37: "Đường giao nhau (ngã ba bên trái)",
-    38: "Giới hạn tốc độ (50km/h)",
-    39: "Giới hạn tốc độ (60km/h)",
-    40: "Giới hạn tốc độ (80km/h)",
-    41: "Giới hạn tốc độ (40km/h)",
-    42: "Các xe chỉ được rẽ trái",
-    43: "Chiều cao tĩnh không thực tế",
-    44: "Nguy hiểm khác",
-    45: "Đường một chiều",
-    46: "Cấm đỗ xe",
-    47: "Cấm ô tô quay đầu xe (được rẽ trái)",
-    48: "Giao nhau với đường sắt có rào chắn",
-    49: "Cấm rẽ trái và quay đầu xe",
-    50: "Chỗ ngoặt nguy hiểm vòng bên phải",
-    51: "Chú ý chướng ngại vật & vòng tránh sang bên phải"
-}
+# Detection color - using blue for YOLOv11
+DETECTION_COLOR = (0, 255, 255)
 
-MODEL_COLORS = {
-    'yolov8': (0, 255, 0),    # Green
-    'yolov11': (255, 0, 0),   # Blue
+VIDEO_CONFIGS = {
+    'max_duration': 45,  # seconds
+    'max_file_size': 50 * 1024 * 1024,  # 50MB
+    'output_fps': 40,
+    'output_codec': 'H264'
 }
 
 class YOLODetector:
     def __init__(self):
-        self.models = {}
-        self.load_models()
-        self.models_loaded = False
+        self.model = None
+        self.load_model()
 
-    
-    def load_models(self):
+    def load_model(self):
+        """Load YOLOv11 model only"""
         try:
-            self.models['yolov8'] = YOLO(r'D:\Project\Traffic_signs\models\v8\best_v8_001.pt')  
-            self.models['yolov11'] = YOLO(r'D:\Project\Traffic_signs\models\v11\best_v11_001.pt')  
-            logger.info("Models loaded successfully")
+            self.model = YOLO(r'D:\Project\Traffic_signs\models\best_v11.0.1.2.pt')  
+            logger.info("YOLOv11 model loaded successfully")
         except Exception as e:
-            logger.error(f"Error loading models: {e}")
-            pass
+            logger.error(f"Error loading YOLOv11 model: {e}")
+            self.model = None
     
-    def detect(self, image: np.ndarray, model_name: str) -> Dict[str, Any]:
-        if self.models is None or model_name not in self.models:
+    def detect(self, image: np.ndarray) -> Dict[str, Any]:
+        """Detect traffic signs using YOLOv11 model"""
+        if self.model is None:
             return {
                 "success": False,
-                "message": f"Model {model_name} chưa được load",
+                "message": "YOLOv11 model chưa được load",
                 "detections": [],
                 "annotated_image": image
             }
         
         try:
-            model = self.models[model_name]
-            results = model(image)[0]
-            
+            results = self.model(image)[0]
             detections = []
 
-            if len(image.shape) == 2 or image.shape[2] == 1: # Ảnh có 1 kênh
-                annotated_image = cv2.cvtColor(image, cv2.COLOR_GRAY)
-
+            # Handle grayscale images
+            if len(image.shape) == 2 or (len(image.shape) == 3 and image.shape[2] == 1):
+                annotated_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
             else:
                 annotated_image = image.copy()
 
+            # Process detections
             for box in results.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                 confidence = float(box.conf[0].cpu().numpy()) 
                 class_id = int(box.cls[0].cpu().numpy())
 
                 if confidence > 0.3:
+                    class_name = self.model.names.get(class_id, f"Unknown_{class_id}")
+
                     detections.append({
                         'class': str(class_id),
                         'confidence': confidence,
                         'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                        'name': CLASS_MAPPING.get(class_id, "Unknown")
+                        'name': class_name
                     })
 
-                    color = MODEL_COLORS.get(model_name, (0,255,0))
-                    cv2.rectangle(annotated_image, pt1=(x1,y1), pt2=(x2,y2), color=color, thickness=2)
+                    # Draw bounding box
+                    cv2.rectangle(annotated_image, (x1, y1), (x2, y2), DETECTION_COLOR, thickness=2)
 
-                    label = f"{CLASS_MAPPING.get(class_id, class_id)} {confidence:.2f}"
+                    # Draw label
+                    label = f"{class_name} {confidence:.2f}"
                     annotated_image = draw_label_with_vietnamese(
-                        annotated_image, label, x1, y1 -20, color=color
+                        annotated_image, label, x1, y1 - 20, color=DETECTION_COLOR
                     )
+                    
             return {
                 'success': True,
-                'message': f"Detection completed with {model_name}",
+                'message': "Detection completed with YOLOv11",
                 'detections': detections,
                 'annotated_image': annotated_image
             }
         except Exception as e:
-            logger.error(f"Error in detection: {e}")
+            logger.error(f"Error in YOLOv11 detection: {e}")
             return {
                 'success': False,
-                "message": f"Error detecting with {model_name}: {str(e)}",
-                'detection': [],
+                "message": f"Error detecting with YOLOv11: {str(e)}",
+                'detections': [],
                 'annotated_image': image
             }
 
 
 def image_to_base64(image: np.ndarray) -> str:
+    """Convert image to base64 string"""
+    try:
+        _, buffer = cv2.imencode('.jpg', image)
+        image_base64 = base64.b64encode(buffer).decode('utf-8')
+        return f"data:image/jpeg;base64,{image_base64}"
+    except Exception as e:
+        logger.error(f"Error converting image to base64: {e}")
+        return ""
 
-    _, buffer = cv2.imencode('.jpg', image)
-    image_base64 = base64.b64encode(buffer).decode('utf-8')
-    return f"data:image/jpeg;base64,{image_base64}"
 
 def validate_image(file: UploadFile) -> np.ndarray:
-
+    """Validate and convert uploaded image file to numpy array"""
     if not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
     
@@ -171,20 +129,142 @@ def validate_image(file: UploadFile) -> np.ndarray:
         raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
 
+def validate_video(file: UploadFile, temp_dir: str) -> str:
+    """Validate uploaded video file and save to temporary directory"""
+    if not file.content_type.startswith('video/'):
+        raise HTTPException(status_code=400, detail="File must be a video")
+    
+    if file.size > VIDEO_CONFIGS['max_file_size']:
+        max_size_mb = VIDEO_CONFIGS['max_file_size'] // 1024 // 1024
+        raise HTTPException(status_code=400, detail=f"Video file too large. Maximum size is {max_size_mb}MB")
+    
+    try:
+        video_path = os.path.join(temp_dir, f"input_{file.filename}")
+        with open(video_path, 'wb') as buffer:
+            contents = file.file.read()
+            buffer.write(contents)
+
+        # Check video duration
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        duration = frame_count / fps if fps > 0 else 0
+        cap.release() 
+
+        if duration > VIDEO_CONFIGS['max_duration']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Video too long. Maximum duration is {VIDEO_CONFIGS['max_duration']} seconds"
+            )
+        return video_path
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid video file: {str(e)}")
+
+
+def process_video(video_path: str, detector: YOLODetector, temp_dir: str) -> Dict[str, Any]:
+    """Process video file and detect traffic signs using YOLOv11"""
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return {
+                'success': False,
+                'message': 'Could not open video file',
+                'detections': [],
+                'output_path': None
+            }
+        
+        # Get video properties
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Set up video writer
+        output_path = os.path.join(temp_dir, "output_yolov11.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+        unique_detections = {}
+        frame_count = 0
+
+        logger.info(f"Processing video with YOLOv11: {total_frames} frames")
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            frame_count += 1
+            frame_result = detector.detect(frame)
+
+            if frame_result['success']:
+                for detection in frame_result['detections']:
+                    class_id = detection['class']
+                    if class_id not in unique_detections:
+                        unique_detections[class_id] = detection
+                annotated_frame = frame_result['annotated_image']
+            else:
+                annotated_frame = frame
+            
+            out.write(annotated_frame)
+
+            if frame_count % 30 == 0:
+                progress = (frame_count / total_frames) * 100
+                logger.info(f"Processing YOLOv11: {progress:.1f}% complete")
+        
+        cap.release()
+        out.release() 
+
+        final_output_path = os.path.join(temp_dir, "output_h264_yolov11.mp4")
+        try:
+            subprocess.run([
+                'ffmpeg', '-i', output_path, '-c:v', 'libx264', '-preset', 'fast',
+                '-c:a', 'aac', final_output_path
+            ], check=True)
+            os.remove(output_path)
+            output_path = final_output_path
+        except Exception as e:
+            logger.warning(f"FFmpeg conversion failed, using original output: {e}")
+
+        final_detections = list(unique_detections.values())
+        logger.info(f"Video processing completed: {len(final_detections)} unique detections")
+
+        return {
+            'success': True,
+            'message': 'Video processing completed with YOLOv11',
+            'detections': final_detections,
+            'output_path': output_path
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing video with YOLOv11: {e}")
+        return {
+            'success': False,
+            'message': f'Error processing video with YOLOv11: {str(e)}',
+            'detections': [],
+            'output_path': None
+        }
+
+
 def draw_label_with_vietnamese(image: np.ndarray, text: str, x: int, y: int, color):
-    """
-    image: ảnh numpy(BGR)
-    text: nội dung tiếng Việt
-    (x,y): vị trí về ( góc trái dưới của text)
-    """
-
-    image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(image_pil)
-
-    font = ImageFont.truetype(r"c:\WINDOWS\Fonts\ARIALN.TTF", 15)
-
-    color_rgb = (color[2], color[1],color[0])
-
-    draw.text((x,y), text=text, font=font, fill=color_rgb)
-
-    return cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+    """Draw Vietnamese text label on image"""
+    try:
+        image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(image_pil)
+        
+        try:
+            font = ImageFont.truetype(r"c:\WINDOWS\Fonts\ARILN.TTF", 24)
+        except:
+            font = ImageFont.load_default()
+            
+        color_rgb = (color[2], color[1], color[0])
+        draw.text((x, y), text=text, font=font, fill=color_rgb)
+    
+        return cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+    
+    except Exception as e:
+        logger.warning(f"Error drawing Vietnamese text, using OpenCV fallback: {e}")
+        cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 3)
+        return image
